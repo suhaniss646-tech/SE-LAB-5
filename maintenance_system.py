@@ -1,64 +1,94 @@
+"""Warehouse asset maintenance registry.
+
+Registers machines, records service dates, raises alerts for overdue
+inspections and exports a report to ``maintenance.json``.
+"""
+
 import json
 import tempfile
 from datetime import datetime, timedelta
 
 # Global state
 assets = {}
-SERVICE_INTERVAL_DAYS = 90
+registration_log = []
+config = {"service_interval_days": 90}
 
 
-def register_asset(asset_id, machine_type, logs=[]):
+def register_asset(asset_id, machine_type):
+    """Register an asset, rejecting empty or duplicate asset ids."""
+    if not asset_id:
+        print("Rejected registration with empty asset id")
+        return
+    if asset_id in assets:
+        print("Duplicate asset id", asset_id, "- registration ignored")
+        return
     assets[asset_id] = {
         "type": machine_type,
         "last_service": datetime.now().strftime("%Y-%m-%d"),
     }
-    logs.append(asset_id)
+    registration_log.append(asset_id)
     print("Registered", asset_id,
-          "- total registrations this run:", len(logs))
+          "- total registrations this run:", len(registration_log))
 
 
 def update_service_date(asset_id, date):
-    try:
-        assets[asset_id]["last_service"] = date
-    except KeyError:
+    """Set the last service date of an existing asset after validation."""
+    if asset_id not in assets:
         print("Could not update", asset_id)
+        return
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        print("Invalid date", date, "- expected YYYY-MM-DD")
+        return
+    assets[asset_id]["last_service"] = date
 
 
 def due_for_inspection():
+    """Return the ids of assets whose last service is older than the
+    configured inspection interval."""
     due = []
-    for a in assets:
-        last = datetime.strptime(assets[a]["last_service"], "%Y-%m-%d")
-        if datetime.now() - last > timedelta(days=SERVICE_INTERVAL_DAYS):
-            due.append(a)
+    for asset_id, record in assets.items():
+        last = datetime.strptime(record["last_service"], "%Y-%m-%d")
+        interval = timedelta(days=config["service_interval_days"])
+        if datetime.now() - last > interval:
+            due.append(asset_id)
     return due
 
 
 def change_interval(days):
-    global SERVICE_INTERVAL_DAYS
-    SERVICE_INTERVAL_DAYS = days
+    """Update the inspection interval, rejecting non-positive values."""
+    if days <= 0:
+        print("Rejected invalid interval", days)
+        return
+    config["service_interval_days"] = days
 
 
 def export_service_report(file="maintenance.json"):
-    f = open(file, "w")
-    f.write(json.dumps(assets, indent=2))
-    f.close()
+    """Write the asset registry as JSON to the given file."""
+    with open(file, "w", encoding="utf-8") as f:
+        f.write(json.dumps(assets, indent=2))
     print("Report written to " + file)
 
 
 def write_scratch_copy():
+    """Write a temporary scratch copy of the registry securely."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json",
-                                     delete=False) as f:
+                                     delete=False, encoding="utf-8") as f:
         f.write(json.dumps(assets))
         path = f.name
     print("Scratch copy at", path)
 
 
-def printAlerts():
-    for a in due_for_inspection():
-        print("ALERT: inspection overdue for", a, assets[a]["type"])
+def print_alerts():
+    """Print an alert for every asset due for inspection."""
+    for asset_id in due_for_inspection():
+        print("ALERT: inspection overdue for",
+              asset_id, assets[asset_id]["type"])
 
 
 def main():
+    """Run the interactive maintenance registry demo."""
     register_asset("FL-01", "Forklift")
     register_asset("CV-07", "Conveyor")
     register_asset("", "Pallet Jack")
@@ -72,9 +102,10 @@ def main():
     if not assets:
         print("No assets registered")
         return
-    printAlerts()
+    print_alerts()
     export_service_report()
     write_scratch_copy()
 
 
-main()
+if __name__ == "__main__":
+    main()
